@@ -1,6 +1,6 @@
 'use client'
 
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useState, ReactElement, Suspense } from 'react'
 import { useSearchParams } from 'next/navigation'
 import Barcode from 'react-barcode'
 
@@ -12,10 +12,9 @@ interface ProductSticker {
   quantity: number
 }
 
-export default function BatchPrintPage() {
+function BatchPrintContent() {
   const searchParams = useSearchParams()
   const [products, setProducts] = useState<ProductSticker[]>([])
-  const [format] = useState(searchParams.get('format') || 'barcode')
   const shopName = 'প্রাগপুর ফ্যামিলি বাজার'
 
   useEffect(() => {
@@ -35,7 +34,7 @@ export default function BatchPrintPage() {
   }, [searchParams])
 
   const renderStickers = () => {
-    const stickers = []
+    const stickers: ReactElement[] = []
     
     products.forEach((product, productIndex) => {
       // Add stickers for each product quantity
@@ -156,5 +155,13 @@ export default function BatchPrintPage() {
         {renderStickers()}
       </div>
     </>
+  )
+}
+
+export default function BatchPrintPage() {
+  return (
+    <Suspense fallback={<div>Loading...</div>}>
+      <BatchPrintContent />
+    </Suspense>
   )
 }

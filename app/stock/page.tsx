@@ -331,8 +331,8 @@ export default function StockPageClient() {
                     onChange={(e) => setBatchPrintFormat(e.target.value as 'barcode' | 'thermal')}
                     className="px-2 py-1 text-sm border border-gray-300 rounded"
                   >
-                    <option value="barcode">Barcode (1.40x0.90")</option>
-                    <option value="thermal">QR Code (2x4")</option>
+                    <option value="barcode">Barcode (1.40x0.90&quot;)</option>
+                    <option value="thermal">QR Code (2x4&quot;)</option>
                   </select>
                 </div>
               </div>
@@ -380,7 +380,7 @@ export default function StockPageClient() {
                               : 'bg-gray-100 hover:bg-gray-200'
                           }`}
                         >
-                          Barcode (1.40x0.90")
+                          Barcode (1.40x0.90&quot;)
                         </button>
                         <button
                           onClick={() => {
@@ -393,7 +393,7 @@ export default function StockPageClient() {
                               : 'bg-gray-100 hover:bg-gray-200'
                           }`}
                         >
-                          QR Code (2x4")
+                          QR Code (2x4&quot;)
                         </button>
                       </div>
                       <ProductCode 

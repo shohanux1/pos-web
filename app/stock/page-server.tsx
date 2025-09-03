@@ -1,7 +1,4 @@
-import { Database } from '@/lib/database.types'
 import { requireAuth } from '@/lib/auth/server'
-
-type StockBatch = Database['public']['Tables']['stock_batches']['Row']
 
 export default async function StockPageServer() {
   // This will redirect to login if not authenticated
