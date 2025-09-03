@@ -15,10 +15,13 @@
     "@supabase/supabase-js": "latest",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
+    "html2canvas": "^1.4.1",
     "lucide-react": "^0.511.0",
     "next": "latest",
     "next-themes": "^0.4.6",
+    "qrcode.react": "^4.2.0",
     "react": "^19.0.0",
+    "react-barcode": "^1.6.1",
     "react-dom": "^19.0.0",
     "tailwind-merge": "^3.3.0"
   },
