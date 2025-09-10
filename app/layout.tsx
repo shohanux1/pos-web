@@ -1,6 +1,9 @@
 import type { Metadata } from "next";
 import { Geist } from "next/font/google";
 import { ThemeProvider } from "next-themes";
+import { ProductProvider } from "@/contexts/ProductContext";
+import { CustomerProvider } from "@/contexts/CustomerContext";
+import { CurrencyProvider } from "@/contexts/CurrencyContext";
 import "./globals.css";
 
 const defaultUrl = process.env.VERCEL_URL
@@ -33,7 +36,13 @@ export default function RootLayout({
           enableSystem
           disableTransitionOnChange
         >
-          {children}
+          <CurrencyProvider>
+            <CustomerProvider>
+              <ProductProvider>
+                {children}
+              </ProductProvider>
+            </CustomerProvider>
+          </CurrencyProvider>
         </ThemeProvider>
       </body>
     </html>
