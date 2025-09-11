@@ -36,6 +36,7 @@ interface ProductContextType {
   addToCart: (product: Product) => void
   removeFromCart: (productId: string) => void
   updateCartQuantity: (productId: string, quantity: number) => void
+  updateCartItemPrice: (productId: string, newPrice: number) => Promise<boolean>
   clearCart: () => void
   
   // Stock
@@ -151,10 +152,10 @@ export function ProductProvider({ children }: { children: ReactNode }) {
       const existingItem = prevCart.find(item => item.id === product.id)
       
       if (existingItem) {
-        // Check stock before adding
-        if (existingItem.quantity >= product.stock_quantity) {
-          console.warn('Insufficient stock')
-          return prevCart
+        // Allow adding even if stock is 0 or negative
+        // Just log a warning for tracking
+        if (product.stock_quantity > 0 && existingItem.quantity >= product.stock_quantity) {
+          console.warn(`Adding item beyond available stock - current: ${existingItem.quantity}, stock: ${product.stock_quantity}`)
         }
         
         return prevCart.map(item =>
@@ -164,13 +165,20 @@ export function ProductProvider({ children }: { children: ReactNode }) {
         )
       }
       
-      // Check if product has stock
+      // Allow adding to cart even if stock is 0 or negative
+      // This enables selling items that are physically available but not in system
       if (product.stock_quantity <= 0) {
-        console.warn('Product out of stock')
-        return prevCart
+        console.warn(`Adding product with zero/negative stock: ${product.name} (stock: ${product.stock_quantity})`)
       }
       
-      return [...prevCart, { ...product, quantity: 1 }]
+      // Add new item with quantity 1
+      const newCartItem: CartItem = { ...product, quantity: 1 }
+      console.log('Adding to cart:', { 
+        name: newCartItem.name, 
+        quantity: newCartItem.quantity,
+        stock_quantity: newCartItem.stock_quantity 
+      })
+      return [...prevCart, newCartItem]
     })
   }
 
@@ -189,13 +197,55 @@ export function ProductProvider({ children }: { children: ReactNode }) {
     setCart(prevCart => {
       return prevCart.map(item => {
         if (item.id === productId) {
-          // Check stock limit
-          const maxQuantity = Math.min(quantity, item.stock_quantity)
-          return { ...item, quantity: maxQuantity }
+          // Allow any quantity - no stock limit
+          // This allows selling more than available stock (negative stock)
+          return { ...item, quantity: quantity }
         }
         return item
       })
     })
+  }
+
+  // Update cart item price and save to database
+  const updateCartItemPrice = async (productId: string, newPrice: number): Promise<boolean> => {
+    if (newPrice < 0) return false
+    
+    try {
+      // Update price in database
+      const { error: updateError } = await supabase
+        .from('products')
+        .update({ 
+          price: newPrice,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', productId)
+      
+      if (updateError) throw updateError
+      
+      // Update cart item price
+      setCart(prevCart => 
+        prevCart.map(item =>
+          item.id === productId
+            ? { ...item, price: newPrice }
+            : item
+        )
+      )
+      
+      // Update products list
+      setProducts(prev => 
+        prev.map(p =>
+          p.id === productId
+            ? { ...p, price: newPrice }
+            : p
+        )
+      )
+      
+      console.log(`Updated price for product ${productId} to ${newPrice}`)
+      return true
+    } catch (err) {
+      console.error('Error updating product price:', err)
+      return false
+    }
   }
 
   // Clear cart
@@ -215,7 +265,8 @@ export function ProductProvider({ children }: { children: ReactNode }) {
 
       if (fetchError) throw fetchError
 
-      const newStock = Math.max(0, product.stock_quantity - quantity)
+      // Allow negative stock - don't use Math.max(0, ...)
+      const newStock = product.stock_quantity - quantity
 
       // Update stock in database
       const { error: updateError } = await supabase
@@ -272,6 +323,7 @@ export function ProductProvider({ children }: { children: ReactNode }) {
     addToCart,
     removeFromCart,
     updateCartQuantity,
+    updateCartItemPrice,
     clearCart,
     
     // Stock

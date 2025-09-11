@@ -31,6 +31,7 @@ interface CreateSaleResult {
 export function useSales() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [sales, setSales] = useState<Sale[]>([])
   const supabase = createClient()
 
   const createSale = async (params: CreateSaleParams): Promise<CreateSaleResult> => {
@@ -96,17 +97,51 @@ export function useSales() {
 
       if (itemsError) throw itemsError
 
-      // Update product stock quantities
+      // Update product stock quantities and create inventory tracking records
       for (const item of cartItems) {
+        // First get current stock from database
+        const { data: product, error: fetchError } = await supabase
+          .from('products')
+          .select('stock_quantity')
+          .eq('id', item.id)
+          .single()
+        
+        if (fetchError) {
+          console.error('Error fetching product stock:', item.id, fetchError)
+          continue
+        }
+        
+        // Decrement stock by quantity sold
+        const newStock = (product?.stock_quantity || 0) - item.quantity
+        
         const { error: stockError } = await supabase
           .from('products')
           .update({ 
-            stock_quantity: item.stock_quantity - item.quantity 
+            stock_quantity: newStock 
           })
           .eq('id', item.id)
 
         if (stockError) {
           console.error('Error updating stock for product:', item.id, stockError)
+        }
+        
+        // Create inventory movement record for tracking
+        const { error: movementError } = await supabase
+          .from('stock_movements')
+          .insert({
+            product_id: item.id,
+            type: 'out',
+            quantity: item.quantity,
+            reference: `SALE-${sale.id.slice(0, 8).toUpperCase()}`,
+            notes: `Sold to ${customer?.name || 'Walk-in Customer'}`,
+            // Don't set batch_id unless we create a corresponding stock_batches record
+            // batch_id has foreign key constraint to stock_batches table
+            user_id: user.id
+            // created_at and updated_at are handled by database defaults
+          })
+        
+        if (movementError) {
+          console.error('Error creating stock movement:', movementError)
         }
       }
 
@@ -136,8 +171,119 @@ export function useSales() {
     }
   }
 
+  // Fetch all sales
+  const fetchSales = async () => {
+    setLoading(true)
+    setError(null)
+    
+    try {
+      const { data, error: fetchError } = await supabase
+        .from('sales')
+        .select(`
+          *,
+          sale_items(count)
+        `)
+        .order('created_at', { ascending: false })
+      
+      if (fetchError) throw fetchError
+      
+      // Transform data to include items_count
+      const salesWithCount = (data || []).map(sale => ({
+        ...sale,
+        items_count: sale.sale_items?.[0]?.count || 0
+      }))
+      
+      setSales(salesWithCount as any)
+      setLoading(false)
+    } catch (err) {
+      console.error('Error fetching sales:', err)
+      setError(err instanceof Error ? err.message : 'Failed to fetch sales')
+      setLoading(false)
+    }
+  }
+
+  // Get sale details including items
+  const getSaleDetails = async (saleId: string) => {
+    try {
+      const { data, error: fetchError } = await supabase
+        .from('sale_items')
+        .select(`
+          *,
+          products:product_id (
+            name,
+            sku,
+            barcode
+          )
+        `)
+        .eq('sale_id', saleId)
+      
+      if (fetchError) throw fetchError
+      
+      return {
+        items: (data || []).map(item => ({
+          product_name: item.products?.name || 'Unknown',
+          product_sku: item.products?.sku || '',
+          quantity: item.quantity,
+          unit_price: item.price,
+          total_price: item.total
+        }))
+      }
+    } catch (err) {
+      console.error('Error fetching sale details:', err)
+      return null
+    }
+  }
+
+  // Void a sale
+  const voidSale = async (saleId: string) => {
+    try {
+      // First get the sale items to restore stock
+      const { data: saleItems, error: itemsError } = await supabase
+        .from('sale_items')
+        .select('product_id, quantity')
+        .eq('sale_id', saleId)
+      
+      if (itemsError) throw itemsError
+      
+      // Restore stock for each item
+      for (const item of saleItems || []) {
+        const { data: product } = await supabase
+          .from('products')
+          .select('stock_quantity')
+          .eq('id', item.product_id)
+          .single()
+        
+        if (product) {
+          await supabase
+            .from('products')
+            .update({ 
+              stock_quantity: product.stock_quantity + item.quantity 
+            })
+            .eq('id', item.product_id)
+        }
+      }
+      
+      // Update sale status to voided
+      const { error: voidError } = await supabase
+        .from('sales')
+        .update({ status: 'voided' })
+        .eq('id', saleId)
+      
+      if (voidError) throw voidError
+      
+      return true
+    } catch (err) {
+      console.error('Error voiding sale:', err)
+      return false
+    }
+  }
+
   return {
+    sales,
     createSale,
+    fetchSales,
+    getSaleDetails,
+    voidSale,
     loading,
     error
   }

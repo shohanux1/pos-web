@@ -16,19 +16,24 @@ interface ProductCardProps {
 
 export default function ProductCard({ product, onAddToCart, viewMode = 'grid' }: ProductCardProps) {
   const { formatAmount } = useCurrency()
-  const isOutOfStock = product.stock_quantity === 0
-  const isLowStock = product.stock_quantity < 20
+  const isNegativeStock = product.stock_quantity < 0
+  const isZeroStock = product.stock_quantity === 0
+  const isLowStock = product.stock_quantity > 0 && product.stock_quantity < 20
+  
+  const getStockStatus = () => {
+    if (isNegativeStock) return { color: 'bg-purple-100 text-purple-600', text: `${product.stock_quantity}` }
+    if (isZeroStock) return { color: 'bg-orange-100 text-orange-600', text: '0' }
+    if (isLowStock) return { color: 'bg-yellow-100 text-yellow-600', text: `${product.stock_quantity}` }
+    return { color: 'bg-green-100 text-green-600', text: `${product.stock_quantity}` }
+  }
+  
+  const stockStatus = getStockStatus()
 
   if (viewMode === 'list') {
     return (
       <button
         onClick={() => onAddToCart(product)}
-        disabled={isOutOfStock}
-        className={`w-full bg-white border border-gray-200 rounded-xl p-4 transition-all flex items-center gap-4 ${
-          isOutOfStock 
-            ? 'opacity-50 cursor-not-allowed' 
-            : 'hover:border-gray-300 hover:shadow-md'
-        }`}
+        className="w-full bg-white border border-gray-200 rounded-xl p-4 transition-all flex items-center gap-4 hover:border-gray-300 hover:shadow-md"
       >
         <span className="text-2xl flex-shrink-0">📦</span>
         <div className="flex-1 text-left min-w-0">
@@ -39,8 +44,8 @@ export default function ProductCard({ product, onAddToCart, viewMode = 'grid' }:
         </div>
         <div className="text-right flex-shrink-0">
           <p className="text-lg font-bold text-gray-900">{formatAmount(product.price)}</p>
-          <p className={`text-xs ${isLowStock ? 'text-red-600' : 'text-green-600'}`}>
-            {product.stock_quantity} in stock
+          <p className={`text-xs font-medium px-2 py-1 rounded-full ${stockStatus.color}`}>
+            {stockStatus.text} in stock
           </p>
         </div>
       </button>
@@ -51,12 +56,7 @@ export default function ProductCard({ product, onAddToCart, viewMode = 'grid' }:
   return (
     <button
       onClick={() => onAddToCart(product)}
-      disabled={isOutOfStock}
-      className={`bg-white border border-gray-200 rounded-2xl p-5 transition-all group flex flex-col h-full min-h-[220px] ${
-        isOutOfStock 
-          ? 'opacity-50 cursor-not-allowed' 
-          : 'hover:border-gray-300 hover:shadow-lg'
-      }`}
+      className="bg-white border border-gray-200 rounded-2xl p-5 transition-all group flex flex-col h-full min-h-[220px] hover:border-gray-300 hover:shadow-lg"
     >
       <div className="text-4xl mb-4">📦</div>
       <div className="flex-1 flex flex-col">
@@ -69,10 +69,8 @@ export default function ProductCard({ product, onAddToCart, viewMode = 'grid' }:
         <span className="text-lg font-bold text-gray-900 truncate">
           {formatAmount(product.price)}
         </span>
-        <span className={`text-xs px-2 py-1 rounded-full whitespace-nowrap flex-shrink-0 ${
-          isLowStock ? 'bg-red-100 text-red-600' : 'bg-green-100 text-green-600'
-        }`}>
-          {product.stock_quantity} left
+        <span className={`text-xs px-2 py-1 rounded-full whitespace-nowrap flex-shrink-0 font-medium ${stockStatus.color}`}>
+          {stockStatus.text} left
         </span>
       </div>
     </button>

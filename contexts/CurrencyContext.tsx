@@ -51,13 +51,24 @@ const CurrencyContext = createContext<CurrencyContextType | undefined>(undefined
 export function CurrencyProvider({ children }: { children: React.ReactNode }) {
   const [currency, setCurrencyState] = useState<Currency>(CURRENCIES[0]) // Default USD
   const [isLoading, setIsLoading] = useState(false)
+  const [hasLoadedForUser, setHasLoadedForUser] = useState<string | null>(null)
   const supabase = useSupabase()
   const { user } = useAuth()
 
-  // Load currency preference
+  // Load currency preference - only when user ID changes
   useEffect(() => {
+    // Skip if we've already loaded for this user ID
+    if (user?.id && hasLoadedForUser === user.id) {
+      return
+    }
+    
+    // Skip if no user and we've already loaded for guest
+    if (!user && hasLoadedForUser === 'guest') {
+      return
+    }
+
     loadCurrencyPreference()
-  }, [user])
+  }, [user?.id]) // Only depend on user ID, not the whole object
 
   const loadCurrencyPreference = async () => {
     try {
@@ -75,6 +86,28 @@ export function CurrencyProvider({ children }: { children: React.ReactNode }) {
       
       // If user is logged in, try to get from profile
       if (user) {
+        // Check if we have a cached value for this user
+        const cachedKey = `currency_${user.id}`
+        const cachedData = localStorage.getItem(cachedKey)
+        
+        if (cachedData) {
+          const { currency: cachedCurrency, timestamp } = JSON.parse(cachedData)
+          const cacheAge = Date.now() - timestamp
+          const CACHE_DURATION = 30 * 60 * 1000 // 30 minutes
+          
+          // Use cache if it's recent
+          if (cacheAge < CACHE_DURATION) {
+            const foundCurrency = CURRENCIES.find(c => c.code === cachedCurrency)
+            if (foundCurrency) {
+              setCurrencyState(foundCurrency)
+              setHasLoadedForUser(user.id)
+              setIsLoading(false)
+              return
+            }
+          }
+        }
+        
+        // Fetch from database
         const { data, error } = await supabase
           .from('profiles')
           .select('currency, currency_symbol')
@@ -85,10 +118,17 @@ export function CurrencyProvider({ children }: { children: React.ReactNode }) {
           const foundCurrency = CURRENCIES.find(c => c.code === data.currency)
           if (foundCurrency) {
             setCurrencyState(foundCurrency)
-            // Save to localStorage
+            // Save to localStorage with timestamp
+            localStorage.setItem(cachedKey, JSON.stringify({
+              currency: foundCurrency.code,
+              timestamp: Date.now()
+            }))
             localStorage.setItem('currency_preference', JSON.stringify(foundCurrency))
           }
         }
+        setHasLoadedForUser(user.id)
+      } else {
+        setHasLoadedForUser('guest')
       }
     } catch (error) {
       console.error('Error loading currency preference:', error)
@@ -104,8 +144,16 @@ export function CurrencyProvider({ children }: { children: React.ReactNode }) {
       // Save to localStorage
       localStorage.setItem('currency_preference', JSON.stringify(newCurrency))
       
-      // If user is logged in, save to profile
+      // If user is logged in, save to profile and update cache
       if (user) {
+        // Update cache with new currency
+        const cachedKey = `currency_${user.id}`
+        localStorage.setItem(cachedKey, JSON.stringify({
+          currency: newCurrency.code,
+          timestamp: Date.now()
+        }))
+        
+        // Save to database
         await supabase
           .from('profiles')
           .update({

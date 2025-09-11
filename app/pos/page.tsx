@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { Search, Plus, Minus, Trash2, Grid3X3, List, User, Package, TrendingUp, Clock } from 'lucide-react'
+import { Search, Plus, Minus, Trash2, Grid3X3, List, User, Package, TrendingUp, Clock, Edit2, Check, X } from 'lucide-react'
 import { useProducts } from '@/contexts/ProductContext'
 import { useCustomers } from '@/contexts/CustomerContext'
 import { useCurrency } from '@/contexts/CurrencyContext'
@@ -10,6 +10,7 @@ import { useAuth } from '@/lib/auth/client'
 import ProductCard from '@/components/ProductCard'
 import CustomerSelectionModal from '@/components/CustomerSelectionModal'
 import ReceiptModal from '@/components/ReceiptModal'
+import QuickAddProductModal from '@/components/QuickAddProductModal'
 import { Database } from '@/lib/database.types'
 
 type Sale = Database['public']['Tables']['sales']['Row']
@@ -20,19 +21,20 @@ export default function POSPage() {
   const { 
     products, 
     cart, 
-    cartTotal,
     cartItemsCount,
     loading,
     error,
     addToCart,
     removeFromCart,
     updateCartQuantity,
+    updateCartItemPrice,
     clearCart,
-    searchProducts
+    searchProducts,
+    fetchProducts
   } = useProducts()
 
   const { selectedCustomer, selectCustomer, customers, searchCustomers } = useCustomers()
-  const { formatAmount } = useCurrency()
+  const { formatAmount, currency } = useCurrency()
   const { createSale, loading: saleLoading } = useSales()
 
   const [searchQuery, setSearchQuery] = useState('')
@@ -42,6 +44,9 @@ export default function POSPage() {
   const [showCustomerModal, setShowCustomerModal] = useState(false)
   const [paymentMethod, setPaymentMethod] = useState('cash')
   const [receivedAmount, setReceivedAmount] = useState(0)
+  const [cartPrices, setCartPrices] = useState<Record<string, number>>({}) // Store edited prices for cart items
+  const [editingPriceId, setEditingPriceId] = useState<string | null>(null)
+  const [editedPrice, setEditedPrice] = useState<string>('')
   const [lastSaleData, setLastSaleData] = useState<{
     sale: Sale
     items: Array<{
@@ -52,24 +57,124 @@ export default function POSPage() {
     }>
   } | null>(null)
 
+  // Track if we've already processed a barcode to prevent duplicates
+  const [processedBarcode, setProcessedBarcode] = useState('')
+  // Quick add product modal state
+  const [showQuickAddModal, setShowQuickAddModal] = useState(false)
+  const [quickAddBarcode, setQuickAddBarcode] = useState('')
+  
   // Update filtered products when search changes
   useEffect(() => {
     const filterProducts = async () => {
       if (searchQuery) {
-        const searchResults = await searchProducts(searchQuery)
-        setFilteredProducts(searchResults)
+        // First check if it's a barcode match in local products
+        const productByBarcode = products.find(p => p.barcode && p.barcode === searchQuery)
+        
+        if (productByBarcode && searchQuery !== processedBarcode) {
+          // Auto-add to cart if exact barcode match and not already processed
+          setProcessedBarcode(searchQuery) // Mark as processed
+          addToCart(productByBarcode)
+          // Clear search after a small delay to ensure state updates
+          setTimeout(() => {
+            setSearchQuery('')
+            setProcessedBarcode('') // Reset processed barcode
+            setFilteredProducts(products)
+          }, 100)
+        } else if (!productByBarcode) {
+          // Check if it looks like a barcode (numeric and certain length)
+          const isLikelyBarcode = /^\d{8,13}$/.test(searchQuery)
+          
+          if (isLikelyBarcode) {
+            // Product not found with this barcode - show quick add modal
+            setQuickAddBarcode(searchQuery)
+            setShowQuickAddModal(true)
+            setSearchQuery('') // Clear search
+            setFilteredProducts(products)
+          } else {
+            // Otherwise do normal search
+            const searchResults = await searchProducts(searchQuery)
+            setFilteredProducts(searchResults)
+          }
+        }
       } else {
         setFilteredProducts(products)
       }
     }
 
     filterProducts()
-  }, [searchQuery, products, searchProducts])
+  }, [searchQuery, products, searchProducts, addToCart, processedBarcode])
 
-  const subtotal = cartTotal
+  // Handle barcode scanning
+  useEffect(() => {
+    let barcode = ''
+    let timeout: NodeJS.Timeout
+
+    const handleKeyPress = (e: KeyboardEvent) => {
+      // Skip if typing in an input field
+      if (document.activeElement?.tagName === 'INPUT') return
+
+      if (e.key === 'Enter' && barcode) {
+        // Barcode scan complete - find product in local state
+        const product = products.find(p => p.barcode === barcode)
+        if (product) {
+          addToCart(product)
+        } else {
+          // Product not found - show quick add modal
+          setQuickAddBarcode(barcode)
+          setShowQuickAddModal(true)
+        }
+        barcode = ''
+      } else if (e.key.length === 1) {
+        // Build barcode string
+        barcode += e.key
+        clearTimeout(timeout)
+        timeout = setTimeout(() => { barcode = '' }, 100)
+      }
+    }
+
+    window.addEventListener('keypress', handleKeyPress)
+    return () => {
+      window.removeEventListener('keypress', handleKeyPress)
+      clearTimeout(timeout)
+    }
+  }, [products, addToCart])
+
+  // Calculate subtotal using edited prices or original prices
+  const subtotal = cart.reduce((sum, item) => {
+    const price = cartPrices[item.id] ?? item.price
+    return sum + (price * item.quantity)
+  }, 0)
   const tax = 0 // No tax for now
   const discount = 0 // No discount for now
   const total = subtotal + tax - discount
+
+  // Handle inline price editing
+  const startEditingPrice = (itemId: string, currentPrice: number) => {
+    setEditingPriceId(itemId)
+    const priceToEdit = cartPrices[itemId] ?? currentPrice
+    setEditedPrice(priceToEdit.toString())
+  }
+
+  const saveEditedPrice = async (itemId: string) => {
+    const newPrice = parseFloat(editedPrice)
+    if (!isNaN(newPrice) && newPrice >= 0) {
+      // Store the edited price in cartPrices state
+      setCartPrices(prev => ({
+        ...prev,
+        [itemId]: newPrice
+      }))
+      
+      // Also update the price in the database immediately
+      await updateCartItemPrice(itemId, newPrice)
+    }
+    setEditingPriceId(null)
+    setEditedPrice('')
+  }
+
+  const cancelEditingPrice = () => {
+    setEditingPriceId(null)
+    setEditedPrice('')
+  }
 
   const handleCheckout = async () => {
     if (cart.length === 0) return
@@ -77,10 +182,16 @@ export default function POSPage() {
     // Set received amount to total if not set
     const finalReceivedAmount = receivedAmount === 0 ? total : receivedAmount
     
+    // Prepare cart items with edited prices
+    const cartItemsWithEditedPrices = cart.map(item => ({
+      ...item,
+      price: cartPrices[item.id] ?? item.price
+    }))
+    
     // Create sale in database
     const result = await createSale({
       customer: selectedCustomer,
-      cartItems: cart,
+      cartItems: cartItemsWithEditedPrices,
       subtotal,
       tax,
       total,
@@ -89,13 +200,16 @@ export default function POSPage() {
     })
     
     if (result.success && result.sale) {
-      // Prepare receipt data
-      const receiptItems = cart.map(item => ({
-        product: item,
-        quantity: item.quantity,
-        price: item.price,
-        total: item.price * item.quantity
-      }))
+      // Prepare receipt data with edited prices
+      const receiptItems = cart.map(item => {
+        const price = cartPrices[item.id] ?? item.price
+        return {
+          product: item,
+          quantity: item.quantity,
+          price: price,
+          total: price * item.quantity
+        }
+      })
       
       setLastSaleData({
         sale: result.sale,
@@ -105,8 +219,9 @@ export default function POSPage() {
       // Show receipt modal
       setShowReceipt(true)
       
-      // Clear cart
+      // Clear cart and prices
       clearCart()
+      setCartPrices({}) // Clear edited prices
       setReceivedAmount(0)
       setPaymentMethod('cash')
     } else {
@@ -115,6 +230,22 @@ export default function POSPage() {
   }
 
   const quickAmounts = [10, 20, 50, 100, 200, 500]
+
+  // Handle product added from quick add modal
+  const handleQuickAddProduct = (newProduct: Product) => {
+    // Add the new product to cart immediately
+    addToCart(newProduct)
+    
+    // Close the modal
+    setShowQuickAddModal(false)
+    setQuickAddBarcode('')
+    
+    // Optional: Refresh products list in background without blocking
+    // This won't cause a reload but will update the product list for future searches
+    setTimeout(() => {
+      fetchProducts()
+    }, 100)
+  }
 
   // Show loading state while checking authentication
   if (authLoading) {
@@ -279,7 +410,44 @@ export default function POSPage() {
                     <div className="flex items-start justify-between mb-3">
                       <div className="flex-1">
                         <h4 className="font-medium text-white">{item.name}</h4>
-                        <p className="text-sm text-gray-400">{formatAmount(item.price)} each</p>
+                        <div className="flex items-center gap-2">
+                          {editingPriceId === item.id ? (
+                            <div className="flex items-center gap-1">
+                              <span className="text-sm text-gray-400">{currency.symbol}</span>
+                              <input
+                                type="number"
+                                value={editedPrice}
+                                onChange={(e) => setEditedPrice(e.target.value)}
+                                className="w-20 text-sm bg-gray-700 rounded px-2 py-1 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                autoFocus
+                                step="0.01"
+                              />
+                              <button
+                                onClick={() => saveEditedPrice(item.id)}
+                                className="p-1 hover:bg-gray-700 rounded transition-colors"
+                              >
+                                <Check className="h-3 w-3 text-green-500" />
+                              </button>
+                              <button
+                                onClick={cancelEditingPrice}
+                                className="p-1 hover:bg-gray-700 rounded transition-colors"
+                              >
+                                <X className="h-3 w-3 text-red-500" />
+                              </button>
+                            </div>
+                          ) : (
+                            <div className="flex items-center gap-2">
+                              <p className="text-sm text-gray-400">{formatAmount(cartPrices[item.id] ?? item.price)} each</p>
+                              <button
+                                onClick={() => startEditingPrice(item.id, item.price)}
+                                className="p-1 hover:bg-gray-700 rounded transition-colors"
+                                title="Edit price"
+                              >
+                                <Edit2 className="h-3 w-3 text-gray-400" />
+                              </button>
+                            </div>
+                          )}
+                        </div>
                       </div>
                       <button
                         onClick={() => removeFromCart(item.id)}
@@ -311,7 +479,7 @@ export default function POSPage() {
                         </button>
                       </div>
                       <span className="font-bold text-lg">
-                        {formatAmount(item.price * item.quantity)}
+                        {formatAmount((cartPrices[item.id] ?? item.price) * item.quantity)}
                       </span>
                     </div>
                   </div>
@@ -396,6 +564,17 @@ export default function POSPage() {
           businessPhone: 'Tel: +1 234 567 8900',
           businessEmail: 'store@mystore.com'
         } : null}
+      />
+
+      {/* Quick Add Product Modal */}
+      <QuickAddProductModal
+        isOpen={showQuickAddModal}
+        onClose={() => {
+          setShowQuickAddModal(false)
+          setQuickAddBarcode('')
+        }}
+        barcode={quickAddBarcode}
+        onProductAdded={handleQuickAddProduct}
       />
     </div>
   )
