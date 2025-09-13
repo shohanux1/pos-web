@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { Database } from '@/lib/database.types'
 
@@ -32,6 +32,9 @@ export function useSales() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [sales, setSales] = useState<Sale[]>([])
+  const [dailyTotal, setDailyTotal] = useState(0)
+  const [totalProfit, setTotalProfit] = useState(0)
+  const [todayProfit, setTodayProfit] = useState(0)
   const supabase = createClient()
 
   const createSale = async (params: CreateSaleParams): Promise<CreateSaleResult> => {
@@ -97,35 +100,12 @@ export function useSales() {
 
       if (itemsError) throw itemsError
 
-      // Update product stock quantities and create inventory tracking records
+      // Create inventory tracking records - the database trigger will handle stock updates
       for (const item of cartItems) {
-        // First get current stock from database
-        const { data: product, error: fetchError } = await supabase
-          .from('products')
-          .select('stock_quantity')
-          .eq('id', item.id)
-          .single()
+        console.log(`[STOCK MOVEMENT] Creating stock movement for ${item.name}, quantity: ${item.quantity}`)
         
-        if (fetchError) {
-          console.error('Error fetching product stock:', item.id, fetchError)
-          continue
-        }
-        
-        // Decrement stock by quantity sold
-        const newStock = (product?.stock_quantity || 0) - item.quantity
-        
-        const { error: stockError } = await supabase
-          .from('products')
-          .update({ 
-            stock_quantity: newStock 
-          })
-          .eq('id', item.id)
-
-        if (stockError) {
-          console.error('Error updating stock for product:', item.id, stockError)
-        }
-        
-        // Create inventory movement record for tracking
+        // Create inventory movement record
+        // The database trigger 'trigger_update_product_stock' will automatically update the stock
         const { error: movementError } = await supabase
           .from('stock_movements')
           .insert({
@@ -142,6 +122,8 @@ export function useSales() {
         
         if (movementError) {
           console.error('Error creating stock movement:', movementError)
+        } else {
+          console.log(`[STOCK MOVEMENT] Stock movement created for ${item.name}, database trigger will update stock`)
         }
       }
 
@@ -162,6 +144,10 @@ export function useSales() {
       }
 
       setLoading(false)
+      
+      // Update daily total after successful sale
+      fetchDailyTotal()
+      
       return { success: true, sale, saleItems: cartItems }
     } catch (err) {
       console.error('Error creating sale:', err)
@@ -202,6 +188,104 @@ export function useSales() {
     }
   }
 
+  // Calculate profit for sales
+  const calculateProfit = async (startDate?: Date, endDate?: Date) => {
+    try {
+      let query = supabase
+        .from('sale_items')
+        .select(`
+          quantity,
+          price,
+          total,
+          sales!inner(status, created_at),
+          products!inner(cost_price)
+        `)
+        .eq('sales.status', 'completed')
+
+      if (startDate && endDate) {
+        query = query
+          .gte('sales.created_at', startDate.toISOString())
+          .lt('sales.created_at', endDate.toISOString())
+      }
+
+      const { data, error } = await query
+
+      if (error) {
+        console.error('Error calculating profit:', error)
+        return { totalProfit: 0, totalRevenue: 0, totalCost: 0 }
+      }
+
+      let totalRevenue = 0
+      let totalCost = 0
+
+      if (data) {
+        data.forEach((item: any) => {
+          const revenue = item.total || 0
+          const cost = (item.products?.cost_price || 0) * item.quantity
+          totalRevenue += revenue
+          totalCost += cost
+        })
+      }
+
+      const totalProfit = totalRevenue - totalCost
+      return { totalProfit, totalRevenue, totalCost }
+    } catch (err) {
+      console.error('Error in calculateProfit:', err)
+      return { totalProfit: 0, totalRevenue: 0, totalCost: 0 }
+    }
+  }
+
+  // Fetch today's sales total and profit (only completed sales)
+  const fetchDailyTotal = async () => {
+    try {
+      // Get start and end of today in local time
+      const now = new Date()
+      const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+      const startOfTomorrow = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1)
+      
+      console.log('[DAILY TOTAL] Fetching sales for date:', startOfToday.toLocaleDateString())
+
+      const { data, error: fetchError } = await supabase
+        .from('sales')
+        .select('total, created_at')
+        .gte('created_at', startOfToday.toISOString())
+        .lt('created_at', startOfTomorrow.toISOString())
+        .eq('status', 'completed') // Only completed sales
+      
+      if (fetchError) {
+        console.error('[DAILY TOTAL] Error:', fetchError)
+        throw fetchError
+      }
+      
+      // Calculate total
+      const total = (data || []).reduce((sum, sale) => sum + (sale.total || 0), 0)
+      console.log(`[DAILY TOTAL] Today's completed sales: ${data?.length || 0} sales, Total: ${total}`)
+      
+      setDailyTotal(total)
+      
+      // Also calculate today's profit
+      const profitData = await calculateProfit(startOfToday, startOfTomorrow)
+      setTodayProfit(profitData.totalProfit)
+      
+      return total
+    } catch (err) {
+      console.error('Error fetching daily total:', err)
+      return 0
+    }
+  }
+  
+  // Fetch all-time profit
+  const fetchTotalProfit = async () => {
+    try {
+      const profitData = await calculateProfit()
+      setTotalProfit(profitData.totalProfit)
+      return profitData.totalProfit
+    } catch (err) {
+      console.error('Error fetching total profit:', err)
+      return 0
+    }
+  }
+
   // Get sale details including items
   const getSaleDetails = async (saleId: string) => {
     try {
@@ -237,7 +321,11 @@ export function useSales() {
   // Void a sale
   const voidSale = async (saleId: string) => {
     try {
-      // First get the sale items to restore stock
+      // Get current user
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user) throw new Error('User not authenticated')
+      
+      // First get the sale items to create reverse stock movements
       const { data: saleItems, error: itemsError } = await supabase
         .from('sale_items')
         .select('product_id, quantity')
@@ -245,31 +333,40 @@ export function useSales() {
       
       if (itemsError) throw itemsError
       
-      // Restore stock for each item
+      // Create reverse stock movements - the database trigger will handle stock updates
       for (const item of saleItems || []) {
-        const { data: product } = await supabase
-          .from('products')
-          .select('stock_quantity')
-          .eq('id', item.product_id)
-          .single()
+        console.log(`[VOID STOCK MOVEMENT] Creating reverse movement for product ${item.product_id}, quantity: ${item.quantity}`)
         
-        if (product) {
-          await supabase
-            .from('products')
-            .update({ 
-              stock_quantity: product.stock_quantity + item.quantity 
-            })
-            .eq('id', item.product_id)
+        // Create inventory movement record with type 'in' to restore stock
+        // The database trigger 'trigger_update_product_stock' will automatically update the stock
+        const { error: movementError } = await supabase
+          .from('stock_movements')
+          .insert({
+            product_id: item.product_id,
+            type: 'in',  // 'in' type will increase stock
+            quantity: item.quantity,
+            reference: `VOID-${saleId.slice(0, 8).toUpperCase()}`,
+            notes: `Voided sale - stock restored`,
+            user_id: user.id
+          })
+        
+        if (movementError) {
+          console.error('Error creating void stock movement:', movementError)
+        } else {
+          console.log(`[VOID STOCK MOVEMENT] Stock movement created, database trigger will restore stock`)
         }
       }
       
-      // Update sale status to voided
+      // Update sale status to cancelled (voided is not in the database CHECK constraint)
       const { error: voidError } = await supabase
         .from('sales')
-        .update({ status: 'voided' })
+        .update({ status: 'cancelled' })
         .eq('id', saleId)
       
       if (voidError) throw voidError
+      
+      // Update daily total after voiding
+      fetchDailyTotal()
       
       return true
     } catch (err) {
@@ -280,8 +377,14 @@ export function useSales() {
 
   return {
     sales,
+    dailyTotal,
+    totalProfit,
+    todayProfit,
     createSale,
     fetchSales,
+    fetchDailyTotal,
+    fetchTotalProfit,
+    calculateProfit,
     getSaleDetails,
     voidSale,
     loading,

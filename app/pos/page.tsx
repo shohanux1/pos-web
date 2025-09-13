@@ -35,7 +35,7 @@ export default function POSPage() {
 
   const { selectedCustomer, selectCustomer, customers, searchCustomers } = useCustomers()
   const { formatAmount, currency } = useCurrency()
-  const { createSale, loading: saleLoading } = useSales()
+  const { createSale, loading: saleLoading, dailyTotal, fetchDailyTotal } = useSales()
 
   const [searchQuery, setSearchQuery] = useState('')
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid')
@@ -56,6 +56,7 @@ export default function POSPage() {
       total: number
     }>
   } | null>(null)
+  const [isProcessing, setIsProcessing] = useState(false)
 
   // Track if we've already processed a barcode to prevent duplicates
   const [processedBarcode, setProcessedBarcode] = useState('')
@@ -63,11 +64,25 @@ export default function POSPage() {
   const [showQuickAddModal, setShowQuickAddModal] = useState(false)
   const [quickAddBarcode, setQuickAddBarcode] = useState('')
   
-  // Update filtered products when search changes
+  // Fetch daily sales total on mount
   useEffect(() => {
-    const filterProducts = async () => {
-      if (searchQuery) {
-        // First check if it's a barcode match in local products
+    fetchDailyTotal()
+  }, [])
+  
+  // Update filtered products when search changes with debounce
+  useEffect(() => {
+    if (!searchQuery) {
+      // If search is empty, immediately show all products
+      setFilteredProducts(products)
+      return
+    }
+
+    // Check if it looks like a barcode (numeric and certain length)
+    const isLikelyBarcode = /^\d{8,13}$/.test(searchQuery)
+    
+    if (isLikelyBarcode) {
+      // For barcodes, wait longer to ensure complete scan
+      const debounceTimer = setTimeout(() => {
         const productByBarcode = products.find(p => p.barcode && p.barcode === searchQuery)
         
         if (productByBarcode && searchQuery !== processedBarcode) {
@@ -80,28 +95,25 @@ export default function POSPage() {
             setProcessedBarcode('') // Reset processed barcode
             setFilteredProducts(products)
           }, 100)
-        } else if (!productByBarcode) {
-          // Check if it looks like a barcode (numeric and certain length)
-          const isLikelyBarcode = /^\d{8,13}$/.test(searchQuery)
-          
-          if (isLikelyBarcode) {
-            // Product not found with this barcode - show quick add modal
-            setQuickAddBarcode(searchQuery)
-            setShowQuickAddModal(true)
-            setSearchQuery('') // Clear search
-            setFilteredProducts(products)
-          } else {
-            // Otherwise do normal search
-            const searchResults = await searchProducts(searchQuery)
-            setFilteredProducts(searchResults)
-          }
+        } else {
+          // Product not found with this barcode - show quick add modal
+          setQuickAddBarcode(searchQuery)
+          setShowQuickAddModal(true)
+          setSearchQuery('') // Clear search
+          setFilteredProducts(products)
         }
-      } else {
-        setFilteredProducts(products)
-      }
-    }
+      }, 500) // Wait 500ms for barcode scanning to complete
 
-    filterProducts()
+      return () => clearTimeout(debounceTimer)
+    } else {
+      // For regular text search, use shorter debounce
+      const debounceTimer = setTimeout(async () => {
+        const searchResults = await searchProducts(searchQuery)
+        setFilteredProducts(searchResults)
+      }, 200) // Shorter delay for regular typing
+
+      return () => clearTimeout(debounceTimer)
+    }
   }, [searchQuery, products, searchProducts, addToCart, processedBarcode])
 
   // Handle barcode scanning
@@ -177,55 +189,69 @@ export default function POSPage() {
   }
 
   const handleCheckout = async () => {
-    if (cart.length === 0) return
+    if (cart.length === 0 || isProcessing) return
     
-    // Set received amount to total if not set
-    const finalReceivedAmount = receivedAmount === 0 ? total : receivedAmount
+    // Prevent double submission
+    setIsProcessing(true)
     
-    // Prepare cart items with edited prices
-    const cartItemsWithEditedPrices = cart.map(item => ({
-      ...item,
-      price: cartPrices[item.id] ?? item.price
-    }))
-    
-    // Create sale in database
-    const result = await createSale({
-      customer: selectedCustomer,
-      cartItems: cartItemsWithEditedPrices,
-      subtotal,
-      tax,
-      total,
-      paymentMethod,
-      receivedAmount: finalReceivedAmount
-    })
-    
-    if (result.success && result.sale) {
-      // Prepare receipt data with edited prices
-      const receiptItems = cart.map(item => {
-        const price = cartPrices[item.id] ?? item.price
-        return {
-          product: item,
-          quantity: item.quantity,
-          price: price,
-          total: price * item.quantity
-        }
+    try {
+      // Set received amount to total if not set
+      const finalReceivedAmount = receivedAmount === 0 ? total : receivedAmount
+      
+      // Prepare cart items with edited prices
+      const cartItemsWithEditedPrices = cart.map(item => ({
+        ...item,
+        price: cartPrices[item.id] ?? item.price
+      }))
+      
+      // Create sale in database
+      const result = await createSale({
+        customer: selectedCustomer,
+        cartItems: cartItemsWithEditedPrices,
+        subtotal,
+        tax,
+        total,
+        paymentMethod,
+        receivedAmount: finalReceivedAmount
       })
+
+      console.log('result', result)
       
-      setLastSaleData({
-        sale: result.sale,
-        items: receiptItems
-      })
-      
-      // Show receipt modal
-      setShowReceipt(true)
-      
-      // Clear cart and prices
-      clearCart()
-      setCartPrices({}) // Clear edited prices
-      setReceivedAmount(0)
-      setPaymentMethod('cash')
-    } else {
-      console.error('Failed to create sale')
+      if (result.success && result.sale) {
+        // Prepare receipt data with edited prices
+        const receiptItems = cart.map(item => {
+          const price = cartPrices[item.id] ?? item.price
+          return {
+            product: item,
+            quantity: item.quantity,
+            price: price,
+            total: price * item.quantity
+          }
+        })
+        
+        setLastSaleData({
+          sale: result.sale,
+          items: receiptItems
+        })
+        
+        // Show receipt modal
+        setShowReceipt(true)
+        
+        // Clear cart and prices
+        clearCart()
+        setCartPrices({}) // Clear edited prices
+        setReceivedAmount(0)
+        setPaymentMethod('cash')
+      } else {
+        console.error('Failed to create sale')
+        alert('Failed to process sale. Please try again.')
+      }
+    } catch (error) {
+      console.error('Error during checkout:', error)
+      alert('An error occurred during checkout. Please try again.')
+    } finally {
+      // Reset processing flag
+      setIsProcessing(false)
     }
   }
 
@@ -303,7 +329,7 @@ export default function POSPage() {
               </div>
               <div className="flex items-center gap-2 text-gray-600">
                 <TrendingUp className="h-4 w-4" />
-                <span className="font-semibold text-green-600">$2,450 today</span>
+                <span className="font-semibold text-green-600">{formatAmount(dailyTotal)} today</span>
               </div>
             </div>
           </div>
@@ -532,10 +558,10 @@ export default function POSPage() {
               </button>
               <button
                 onClick={handleCheckout}
-                disabled={cart.length === 0 || saleLoading}
+                disabled={cart.length === 0 || saleLoading || isProcessing}
                 className="flex-[2] py-4 bg-blue-600 hover:bg-blue-700 rounded-xl font-semibold transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                {saleLoading ? 'Processing...' : `Pay ${formatAmount(total)}`}
+                {(saleLoading || isProcessing) ? 'Processing...' : `Pay ${formatAmount(total)}`}
               </button>
             </div>
           </div>
@@ -559,10 +585,10 @@ export default function POSPage() {
         receiptData={lastSaleData ? {
           sale: lastSaleData.sale,
           items: lastSaleData.items,
-          businessName: 'My Store',
-          businessAddress: '123 Main Street, City',
-          businessPhone: 'Tel: +1 234 567 8900',
-          businessEmail: 'store@mystore.com'
+          businessName: 'Pragpur Family Bazar',
+          businessAddress: 'Pragpur, Char-Pragpur, Daulotpur',
+          businessPhone: '01740486802',
+          businessEmail: ''
         } : null}
       />
 

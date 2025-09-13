@@ -75,4 +75,103 @@
   .scrollbar-hide::-webkit-scrollbar {
     display: none;
   }
+  
+  /* Custom animations for UI components */
+  @keyframes animate-in {
+    from {
+      opacity: 0;
+      transform: translateY(-4px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  @keyframes fade-in {
+    from {
+      opacity: 0;
+    }
+    to {
+      opacity: 1;
+    }
+  }
+
+  @keyframes slide-in-from-top-1 {
+    from {
+      transform: translateY(-0.25rem);
+    }
+    to {
+      transform: translateY(0);
+    }
+  }
+
+  .animate-in {
+    animation: animate-in 0.2s ease-out;
+  }
+
+  .fade-in {
+    animation: fade-in 0.2s ease-out;
+  }
+
+  .slide-in-from-top-1 {
+    animation: slide-in-from-top-1 0.2s ease-out;
+  }
+  
+  /* Print styles for receipt */
+  @media print {
+    @page {
+      size: auto;
+      margin: 10mm;
+    }
+    
+    html, body {
+      height: auto !important;
+      overflow: visible !important;
+      background: white !important;
+      margin: 0 !important;
+      padding: 0 !important;
+    }
+    
+    /* Hide all content except receipt modal */
+    body * {
+      visibility: hidden !important;
+    }
+    
+    /* Show only receipt modal and its children */
+    .receipt-modal-wrapper,
+    .receipt-modal-wrapper * {
+      visibility: visible !important;
+    }
+    
+    /* Position receipt at top left */
+    .receipt-modal-wrapper {
+      position: absolute !important;
+      left: 0 !important;
+      top: 0 !important;
+      width: 100% !important;
+    }
+    
+    .receipt-content {
+      font-family: 'Courier New', monospace;
+      width: 100%;
+      max-width: 100%;
+      margin: 0 auto;
+      padding: 10px;
+      page-break-after: auto;
+      page-break-inside: avoid;
+    }
+    
+    .print\:hidden {
+      display: none !important;
+    }
+    
+    .print\:p-0 {
+      padding: 0 !important;
+    }
+    
+    .print\:p-4 {
+      padding: 10px !important;
+    }
+  }
 }

@@ -2,25 +2,65 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
-import { Search, Download, Eye, Printer, RefreshCw, TrendingUp, Package, Users, DollarSign, Clock, MoreVertical, X } from 'lucide-react'
+import { Search, Download, Eye, Printer, RefreshCw, TrendingUp, Package, Users, DollarSign, Clock, MoreVertical, X, Calendar, CalendarDays, CheckCircle, XCircle, CreditCard, Banknote, Smartphone } from 'lucide-react'
 import { useSales } from '@/hooks/useSales'
 import { useAuth } from '@/lib/auth/client'
 import { useCurrency } from '@/contexts/CurrencyContext'
 import { Database } from '@/lib/database.types'
 import ReceiptModal from '@/components/ReceiptModal'
+import DatePicker from 'react-datepicker'
+import 'react-datepicker/dist/react-datepicker.css'
+import Select, { SelectOption } from '@/components/ui/Select'
 
 type Sale = Database['public']['Tables']['sales']['Row']
 
 export default function SalesPage() {
   const router = useRouter()
   const { user, loading: authLoading } = useAuth(true)
-  const { sales, loading, fetchSales, getSaleDetails, voidSale } = useSales()
+  const { 
+    sales, 
+    loading, 
+    fetchSales, 
+    getSaleDetails, 
+    voidSale,
+    totalProfit,
+    todayProfit,
+    fetchTotalProfit,
+    calculateProfit
+  } = useSales()
   const { formatAmount } = useCurrency()
   
   const [searchQuery, setSearchQuery] = useState('')
   const [dateFilter, setDateFilter] = useState('today')
   const [statusFilter, setStatusFilter] = useState('all')
   const [paymentMethodFilter, setPaymentMethodFilter] = useState('all')
+  const [startDate, setStartDate] = useState<Date | null>(null)
+  const [endDate, setEndDate] = useState<Date | null>(null)
+  const [showDatePicker, setShowDatePicker] = useState(false)
+  const [customProfit, setCustomProfit] = useState(0)
+  
+  // Select options
+  const dateOptions: SelectOption[] = [
+    { value: 'all', label: 'All Time', icon: <Clock className="h-4 w-4 text-gray-500" /> },
+    { value: 'today', label: 'Today', icon: <Calendar className="h-4 w-4 text-blue-500" /> },
+    { value: 'week', label: 'This Week', icon: <CalendarDays className="h-4 w-4 text-purple-500" /> },
+    { value: 'month', label: 'This Month', icon: <CalendarDays className="h-4 w-4 text-orange-500" /> },
+    { value: 'custom', label: 'Custom Range', icon: <Calendar className="h-4 w-4 text-green-500" /> }
+  ]
+  
+  const statusOptions: SelectOption[] = [
+    { value: 'all', label: 'All Status' },
+    { value: 'completed', label: 'Completed', icon: <CheckCircle className="h-4 w-4 text-green-500" /> },
+    { value: 'pending', label: 'Pending', icon: <Clock className="h-4 w-4 text-yellow-500" /> },
+    { value: 'cancelled', label: 'Cancelled', icon: <XCircle className="h-4 w-4 text-red-500" /> }
+  ]
+  
+  const paymentOptions: SelectOption[] = [
+    { value: 'all', label: 'All Payments' },
+    { value: 'cash', label: 'Cash', icon: <Banknote className="h-4 w-4 text-green-500" /> },
+    { value: 'card', label: 'Card', icon: <CreditCard className="h-4 w-4 text-blue-500" /> },
+    { value: 'mobile', label: 'Mobile', icon: <Smartphone className="h-4 w-4 text-purple-500" /> }
+  ]
   const [showReceiptModal, setShowReceiptModal] = useState(false)
   const [receiptData, setReceiptData] = useState<{
     sale: Sale
@@ -37,16 +77,21 @@ export default function SalesPage() {
   } | null>(null)
   const [showActions, setShowActions] = useState<string | null>(null)
 
-  // Calculate statistics
+  // Calculate statistics (only for completed sales, excluding cancelled/voided/refunded)
+  const completedSales = sales.filter(sale => sale.status === 'completed')
+  const todaysCompletedSales = completedSales.filter(sale => {
+    const saleDate = new Date(sale.created_at || new Date())
+    const today = new Date()
+    return saleDate.toDateString() === today.toDateString()
+  })
+  
   const stats = {
-    totalSales: sales.length,
-    totalRevenue: sales.reduce((sum, sale) => sum + (sale.total || 0), 0),
-    averageOrderValue: sales.length > 0 ? sales.reduce((sum, sale) => sum + (sale.total || 0), 0) / sales.length : 0,
-    todaysSales: sales.filter(sale => {
-      const saleDate = new Date(sale.created_at || new Date())
-      const today = new Date()
-      return saleDate.toDateString() === today.toDateString()
-    }).length
+    totalSales: completedSales.length,
+    totalRevenue: completedSales.reduce((sum, sale) => sum + (sale.total || 0), 0),
+    totalProfit: dateFilter === 'custom' ? customProfit : totalProfit,
+    todaysSales: todaysCompletedSales.length,
+    todaysRevenue: todaysCompletedSales.reduce((sum, sale) => sum + (sale.total || 0), 0),
+    todaysProfit: todayProfit
   }
 
   // Filter sales based on search and filters
@@ -79,6 +124,10 @@ export default function SalesPage() {
       const monthAgo = new Date(today)
       monthAgo.setMonth(monthAgo.getMonth() - 1)
       if (saleDate < monthAgo) return false
+    } else if (dateFilter === 'custom' && startDate && endDate) {
+      const endDatePlusOne = new Date(endDate)
+      endDatePlusOne.setHours(23, 59, 59, 999)
+      if (saleDate < startDate || saleDate > endDatePlusOne) return false
     }
 
     // Status filter
@@ -122,10 +171,10 @@ export default function SalesPage() {
       setReceiptData({
         sale,
         items: itemsWithProducts,
-        businessName: 'My Store',
-        businessAddress: '123 Main Street, City',
-        businessPhone: 'Tel: +1 234 567 8900',
-        businessEmail: 'store@mystore.com'
+        businessName: 'Pragpur Family Bazar',
+        businessAddress: 'Pragpur, Char-Pragpur, Daulotpur',
+        businessPhone: '01740486802',
+        businessEmail: ''
       })
       setShowReceiptModal(true)
     }
@@ -164,8 +213,22 @@ export default function SalesPage() {
   useEffect(() => {
     if (user) {
       fetchSales()
+      fetchTotalProfit()
     }
   }, [user])
+  
+  // Handle custom date range selection for profit calculation
+  useEffect(() => {
+    if (dateFilter === 'custom' && startDate && endDate) {
+      const fetchCustomProfit = async () => {
+        const endDatePlusOne = new Date(endDate)
+        endDatePlusOne.setDate(endDatePlusOne.getDate() + 1)
+        const result = await calculateProfit(startDate, endDatePlusOne)
+        setCustomProfit(result.totalProfit)
+      }
+      fetchCustomProfit()
+    }
+  }, [startDate, endDate, dateFilter, calculateProfit])
 
   if (authLoading) {
     return (
@@ -257,10 +320,10 @@ export default function SalesPage() {
               <div className="h-12 w-12 bg-orange-100 rounded-lg flex items-center justify-center">
                 <TrendingUp className="h-6 w-6 text-orange-600" />
               </div>
-              <span className="text-sm text-gray-500">Average</span>
+              <span className="text-sm text-gray-500">Profit</span>
             </div>
-            <p className="text-2xl font-bold text-gray-900">{formatAmount(stats.averageOrderValue)}</p>
-            <p className="text-sm text-gray-600 mt-1">Avg. order value</p>
+            <p className="text-2xl font-bold text-gray-900">{formatAmount(stats.totalProfit)}</p>
+            <p className="text-sm text-gray-600 mt-1">{dateFilter === 'today' ? "Today's profit" : "Total profit"}</p>
           </div>
         </div>
 
@@ -282,39 +345,90 @@ export default function SalesPage() {
             </div>
 
             {/* Quick Filters */}
-            <div className="flex gap-2">
-              <select
+            <div className="flex gap-2 flex-wrap">
+              <Select
+                options={dateOptions}
                 value={dateFilter}
-                onChange={(e) => setDateFilter(e.target.value)}
-                className="px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500"
-              >
-                <option value="all">All Time</option>
-                <option value="today">Today</option>
-                <option value="week">This Week</option>
-                <option value="month">This Month</option>
-              </select>
+                onChange={(value) => {
+                  setDateFilter(value)
+                  if (value === 'custom') {
+                    setShowDatePicker(true)
+                  }
+                }}
+                placeholder="Select period"
+                className="min-w-[180px]"
+              />
+              
+              {dateFilter === 'custom' && (
+                <div className="relative">
+                  <button
+                    onClick={() => setShowDatePicker(!showDatePicker)}
+                    className="px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 flex items-center gap-2"
+                  >
+                    <Calendar className="h-4 w-4 text-gray-500" />
+                    <span className="text-sm">
+                      {startDate && endDate 
+                        ? `${startDate.toLocaleDateString()} - ${endDate.toLocaleDateString()}`
+                        : 'Select dates'}
+                    </span>
+                  </button>
+                  {showDatePicker && (
+                    <div className="absolute top-full mt-2 z-50 bg-white rounded-xl shadow-lg border border-gray-200 p-4">
+                      <div className="flex gap-2">
+                        <div>
+                          <label className="text-xs text-gray-500 mb-1 block">Start Date</label>
+                          <DatePicker
+                            selected={startDate}
+                            onChange={(date: Date | null) => setStartDate(date)}
+                            selectsStart
+                            startDate={startDate}
+                            endDate={endDate}
+                            maxDate={new Date()}
+                            className="px-3 py-2 border border-gray-200 rounded-lg text-sm"
+                            placeholderText="Start date"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-xs text-gray-500 mb-1 block">End Date</label>
+                          <DatePicker
+                            selected={endDate}
+                            onChange={(date: Date | null) => setEndDate(date)}
+                            selectsEnd
+                            startDate={startDate}
+                            endDate={endDate}
+                            minDate={startDate || undefined}
+                            maxDate={new Date()}
+                            className="px-3 py-2 border border-gray-200 rounded-lg text-sm"
+                            placeholderText="End date"
+                          />
+                        </div>
+                      </div>
+                      <button
+                        onClick={() => setShowDatePicker(false)}
+                        className="mt-3 w-full px-3 py-2 bg-gray-900 text-white rounded-lg text-sm hover:bg-gray-800"
+                      >
+                        Apply
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
 
-              <select
+              <Select
+                options={statusOptions}
                 value={statusFilter}
-                onChange={(e) => setStatusFilter(e.target.value)}
-                className="px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500"
-              >
-                <option value="all">All Status</option>
-                <option value="completed">Completed</option>
-                <option value="pending">Pending</option>
-                <option value="voided">Voided</option>
-              </select>
+                onChange={setStatusFilter}
+                placeholder="Select status"
+                className="min-w-[160px]"
+              />
 
-              <select
+              <Select
+                options={paymentOptions}
                 value={paymentMethodFilter}
-                onChange={(e) => setPaymentMethodFilter(e.target.value)}
-                className="px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500"
-              >
-                <option value="all">All Payments</option>
-                <option value="cash">Cash</option>
-                <option value="card">Card</option>
-                <option value="mobile">Mobile</option>
-              </select>
+                onChange={setPaymentMethodFilter}
+                placeholder="Payment method"
+                className="min-w-[170px]"
+              />
             </div>
           </div>
         </div>
@@ -420,14 +534,19 @@ export default function SalesPage() {
                       <td className="px-6 py-4 whitespace-nowrap">
                         <div className="relative">
                           <button
-                            onClick={() => setShowActions(showActions === sale.id ? null : sale.id)}
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              setShowActions(showActions === sale.id ? null : sale.id)
+                            }}
                             className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
                           >
                             <MoreVertical className="h-4 w-4 text-gray-600" />
                           </button>
                           
                           {showActions === sale.id && (
-                            <div className="absolute right-0 mt-2 w-48 bg-white rounded-lg shadow-lg border border-gray-200 z-10">
+                            <div 
+                              className="absolute right-0 mt-2 w-48 bg-white rounded-lg shadow-lg border border-gray-200 z-10"
+                              onClick={(e) => e.stopPropagation()}>
                               <button
                                 onClick={() => {
                                   handleViewReceipt(sale)

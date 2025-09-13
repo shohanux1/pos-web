@@ -92,34 +92,12 @@ export default function SaleDetailsPage() {
         // Get current user for inventory tracking
         const { data: { user } } = await supabase.auth.getUser()
         
-        // Restore stock for each item
+        // Create reverse stock movements - the database trigger will handle stock restoration
         for (const item of sale.sale_items) {
-          const { data: currentProduct, error: fetchError } = await supabase
-            .from('products')
-            .select('stock_quantity')
-            .eq('id', item.product_id)
-            .single()
-          
-          if (fetchError) {
-            console.error('Error fetching product:', fetchError)
-            continue
-          }
-          
-          // Add back the quantity that was sold
-          const newStock = (currentProduct?.stock_quantity || 0) + item.quantity
-          
-          const { error: updateError } = await supabase
-            .from('products')
-            .update({ 
-              stock_quantity: newStock 
-            })
-            .eq('id', item.product_id)
-          
-          if (updateError) {
-            console.error('Error updating stock for product:', item.product_id, updateError)
-          }
+          console.log(`[VOID STOCK] Creating reverse movement for product ${item.product_id}, quantity: ${item.quantity}`)
           
           // Create inventory movement record for tracking
+          // The database trigger 'trigger_update_product_stock' will automatically restore the stock
           if (user) {
             const { error: movementError } = await supabase
               .from('stock_movements')
@@ -136,6 +114,8 @@ export default function SaleDetailsPage() {
             
             if (movementError) {
               console.error('Error creating stock movement:', movementError)
+            } else {
+              console.log(`[VOID STOCK] Stock movement created, database trigger will restore stock`)
             }
           }
         }
