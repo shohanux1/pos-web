@@ -255,8 +255,6 @@ export default function POSPage() {
     }
   }
 
-  const quickAmounts = [10, 20, 50, 100, 200, 500]
-
   // Handle product added from quick add modal
   const handleQuickAddProduct = (newProduct: Product) => {
     // Add the new product to cart immediately
@@ -533,18 +531,6 @@ export default function POSPage() {
                   <span className="text-3xl font-bold">{formatAmount(total)}</span>
                 </div>
               </div>
-            </div>
-
-            {/* Quick Cash Amounts */}
-            <div className="grid grid-cols-3 gap-2 mb-4">
-              {quickAmounts.map(amount => (
-                <button
-                  key={amount}
-                  className="py-2 bg-gray-800 hover:bg-gray-700 rounded-lg text-sm font-medium transition-colors"
-                >
-                  {formatAmount(amount)}
-                </button>
-              ))}
             </div>
 
             {/* Action Buttons */}
